@@ -1,4 +1,4 @@
--- 당구 통합 도우미 (UI 라이브러리 분리 버전)
+-- 당구 통합 도우미 (UI 라이브러리 분리 버전 - 고정밀 경로 및 자동 플레이 최적화)
 -- UI: https://github.com/Footagesus/WindUI/releases/latest/download/main.lua
 
 local function __patchAI(modules, name)
@@ -76,8 +76,8 @@ local function __patchEarly(s, selectedRemote, seed, add, physicsFor, poolPhysic
 			if best then
 				local delta = balls[best].p - origin
 				local angle = math.atan2(delta.Z, delta.X)
-				for _, offset in ipairs({0, 0.004, -0.004, 0.01, -0.01}) do
-					for _, power in ipairs({1, 0.9}) do
+				for _, offset in ipairs({0, 0.002, -0.002, 0.006, -0.006, 0.012, -0.012}) do
+					for _, power in ipairs({1, 0.95, 0.85}) do
 						add({angle = angle + offset, power = power, side = 0, top = 0})
 					end
 				end
@@ -101,7 +101,7 @@ local function __patchEarly(s, selectedRemote, seed, add, physicsFor, poolPhysic
 						local toHole = pocket.hole - ball.p
 						if toHole.Magnitude > c.Radius then
 							local ghost = ball.p - toHole.Unit * (2 * c.Radius)
-							for _, back in ipairs({5, 9, 14}) do
+							for _, back in ipairs({3, 5, 8, 12, 16}) do
 								local pos = ghost - toHole.Unit * (back * c.Radius)
 								if validSpot(pos) and clearLine(balls, pos, ghost, 1, i) and clearLine(balls, ball.p, pocket.hole, 1, i) then
 									table.insert(spots, {pos = pos, angle = math.atan2(toHole.Z, toHole.X), distance = (ghost - pos).Magnitude + toHole.Magnitude})
@@ -113,10 +113,10 @@ local function __patchEarly(s, selectedRemote, seed, add, physicsFor, poolPhysic
 				end
 			end
 			table.sort(spots, function(x, y) return x.distance < y.distance end)
-			for k = 1, math.min(#spots, 8) do
+			for k = 1, math.min(#spots, 12) do
 				local spot = spots[k]
-				local approximate = math.clamp(math.sqrt(2.8 * c.RollingFriction * c.Gravity * spot.distance) / c.MaxSpeed, 0.13, 0.6)
-				for _, multiplier in ipairs({1.4, 2}) do
+				local approximate = math.clamp(math.sqrt(2.8 * c.RollingFriction * c.Gravity * spot.distance) / c.MaxSpeed, 0.1, 0.7)
+				for _, multiplier in ipairs({1.2, 1.5, 2.0}) do
 					add({angle = spot.angle, power = approximate * multiplier, side = 0, top = 0, cue = {spot.pos.X, spot.pos.Z}})
 				end
 			end
@@ -130,10 +130,10 @@ local function __patchEarly(s, selectedRemote, seed, add, physicsFor, poolPhysic
 			local distance = delta.Magnitude
 			if distance > 2 * c.Radius then
 				local base = math.atan2(delta.Z, delta.X)
-				for _, f in ipairs({0.5, -0.5, 0.25, -0.25, 0.75, -0.75}) do
+				for _, f in ipairs({0.6, -0.6, 0.4, -0.4, 0.2, -0.2, 0.8, -0.8, 0.1, -0.1}) do
 					local offset = math.asin(math.min(0.99, math.abs(f) * 2 * c.Radius / distance)) * (f > 0 and 1 or -1)
-					for _, power in ipairs({0.45, 0.65, 0.85}) do
-						add({angle = base + offset, power = power, side = f > 0 and 0.2 or -0.2, top = 0.15})
+					for _, power in ipairs({0.4, 0.55, 0.7, 0.85, 0.95}) do
+						add({angle = base + offset, power = power, side = f > 0 and 0.25 or -0.25, top = 0.15})
 					end
 				end
 			end
@@ -143,14 +143,13 @@ end
 
 local function __patchLate(s, seed, add)
 	if seed or s.PoolMode then return end
-	for index = 0, 71 do
-		local angle = index * math.pi / 36
-		for _, power in ipairs({0.55, 0.8}) do
+	for index = 0, 143 do
+		local angle = index * math.pi / 72
+		for _, power in ipairs({0.5, 0.7, 0.85}) do
 			add({angle = angle, power = power, side = 0, top = 0.2})
 		end
 	end
 end
-
 
 -- UI Library (external) — WindUI
 local UI_LIB_URL = "https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"
@@ -169,7 +168,6 @@ local function loadUILibrary()
 	if ok and type(result) == "string" and #result > 100 then
 		source = result
 	else
-		-- fallback: some executors use http_request / request
 		local requestFn = (syn and syn.request) or (http and http.request) or http_request or request
 		if type(requestFn) == "function" then
 			local resp = requestFn({ Url = UI_LIB_URL, Method = "GET" })
@@ -269,7 +267,6 @@ local function startPreview()
 			end
 		end
 		if not chosen then return nil end
-
 		return geometry.Configure(table.clone(config), chosen)
 	end
 	local function build(physics, balls, cueIndex, direction, power, spinX, spinY, boost)
@@ -290,7 +287,7 @@ local function startPreview()
 		local reach = physics.Reach and physics.Reach(copies, cueIndex, direction) or boost or 1
 		physics.Strike(cue, direction, math.clamp(power, 0, 1), spinX, spinY, reach)
 		local dt = config.Step
-		local steps = math.min(math.ceil(12 / dt), 900)
+		local steps = math.min(math.ceil(12 / dt), 1200)
 		local simulated = 0
 		local settledFrames = 0
 		for step = 1, steps do
@@ -299,9 +296,9 @@ local function startPreview()
 			local moving = false
 			for i, ball in ipairs(copies) do
 				if not ball.pocketed then
-					if step % 3 == 0 or step == steps then
+					if step % 2 == 0 or step == steps then
 						local path = paths[i]
-						if (ball.p - path[#path]).Magnitude > 0.002 then
+						if (ball.p - path[#path]).Magnitude > 0.0015 then
 							path[#path + 1] = ball.p
 						end
 					end
@@ -315,13 +312,11 @@ local function startPreview()
 			else
 				settledFrames = settledFrames + 1
 			end
-			-- Require several consecutive stationary frames to avoid stopping a
-			-- trajectory in the middle of a collision/low-speed transition.
-			if settledFrames >= 8 then
+			if settledFrames >= 10 then
 				for i, ball in ipairs(copies) do
 					if not ball.pocketed then
 						local path = paths[i]
-						if (ball.p - path[#path]).Magnitude > 0.002 then
+						if (ball.p - path[#path]).Magnitude > 0.0015 then
 							path[#path + 1] = ball.p
 						end
 					end
@@ -330,7 +325,6 @@ local function startPreview()
 			end
 		end
 		local count = 0
-
 		for pass = 1, 2 do
 			for i, path in ipairs(paths) do
 				if (pass == 1 and i == cueIndex) or (pass == 2 and i ~= cueIndex) then
@@ -348,12 +342,11 @@ local function startPreview()
 		state.Error = nil
 	end
 	wrapper = function(physics, balls, cueIndex, direction, power, spinX, spinY, ...)
-
 		local result = original(physics, balls, cueIndex, direction, power, spinX, spinY, ...)
 		if alive then
 			lastCall = os.clock()
 			state.Calls = state.Calls + 1
-			if state.Enabled and not busy and lastCall - lastBuild >= 0.12 then
+			if state.Enabled and not busy and lastCall - lastBuild >= 0.08 then
 				lastBuild = lastCall
 				busy = true
 				local _, selectedPower = ...
@@ -368,7 +361,6 @@ local function startPreview()
 		return result
 	end
 	function state.SetEnabled(value)
-		-- 예측 경로는 신뢰도/호출 간격과 관계없이 항상 유지합니다.
 		state.Enabled = true
 	end
 	function state.DrawPlan(physics, balls, cueIndex, plan)
@@ -401,7 +393,7 @@ local function startPreview()
 		local shown = originalShow(self, ...)
 		if alive and shown then
 			lastCall = os.clock()
-			if state.Enabled and state.OnPoolGuide and lastCall >= state.HoldUntil and lastCall - lastBuild >= 0.2 then
+			if state.Enabled and state.OnPoolGuide and lastCall >= state.HoldUntil and lastCall - lastBuild >= 0.15 then
 				lastBuild = lastCall
 				local data = ...
 				local ok, err = pcall(state.OnPoolGuide, data)
@@ -412,12 +404,12 @@ local function startPreview()
 	end
 	guides.Show = showWrapper
 	heartbeat = runService.Heartbeat:Connect(function()
-		-- 새 예측 호출이 잠시 없어도 마지막 최상위 예측 경로를 유지합니다.
 		if not state.Enabled then hide() end
 	end)
 	env.BilliardsPath = state
 	return state
 end
+
 local function startAuto(preview)
 	local env = getgenv()
 	local modules = game:GetService("ReplicatedStorage"):WaitForChild("Billiards", 10)
@@ -436,15 +428,15 @@ local function startAuto(preview)
 	local state = {
 		Enabled = false, Status = "경기 상태 확인 중", ShotsSent = 0,
 		ShotsAccepted = 0, Error = nil, LastPlan = nil, Thinking = false,
-		ThinkSeconds = 10, Level = 4, StrongPlay = true, SmoothCue = true, SmoothCuePreference = true, AimSeconds = 1.0, HumanThinking = true,
+		ThinkSeconds = 8, Level = 6, StrongPlay = true, SmoothCue = true, SmoothCuePreference = true, AimSeconds = 0.8, HumanThinking = true,
 		Style = "balanced", StyleName = "균형형",
 	}
 	local alive, generation = true, 0
 	local remote, snapshot, listener, heartbeat, window, statusLabel, toggle, modeLabel, statsLabel
 	state.Preview = preview
-	state.Version = "20261115_WorkingUI_LiveSim"
+	state.Version = "20261115_PreciseDirect"
 	state.Standalone = true
-	local attempted, pending, plannedKey, readyAt
+	local attempted, pending, readyAt
 	local lastTick, lastSync = 0, -math.huge
 	local tablePhysics, physicsRemote, physicsThree
 	local function key(s)
@@ -462,7 +454,7 @@ local function startAuto(preview)
 		local now = workspace:GetServerTimeNow()
 		if now < (tonumber(s.busyUntil) or 0) then return false end
 		local deadline = tonumber(s.turnDeadline)
-		return deadline == nil or now + 0.6 < deadline
+		return deadline == nil or now + 0.3 < deadline
 	end
 	local function setStatus(text)
 		if state.Status == text then return end
@@ -570,7 +562,7 @@ local function startAuto(preview)
 		for _ = 1, math.ceil(30 / poolPhysics.Config.Step) do
 			poolPhysics.Step(balls, poolPhysics.Config.Step, contact, impact, pocket)
 			if poolPhysics.IsSettled(balls) then settled = true break end
-			if os.clock() - frameAt > 0.003 then task.wait() frameAt = os.clock() if interrupted() then return nil, "포켓볼 검증 중 상태 변경 또는 시간 초과" end end
+			if os.clock() - frameAt > 0.002 then task.wait() frameAt = os.clock() if interrupted() then return nil, "포켓볼 검증 중 상태 변경 또는 시간 초과" end end
 		end
 		if not settled then return nil, "포켓볼 정지 확인 시간 초과" end
 		plan.VerifiedFoul = scratched or not first or not legal[first] or (not rail and any == 0 and not eight)
@@ -626,7 +618,7 @@ local function startAuto(preview)
 		for _ = 1, math.ceil(35 / physics.Config.Step) do
 			test:Step(physics.Config.Step)
 			if not test.moving then break end
-			if os.clock() - frameAt > 0.003 then
+			if os.clock() - frameAt > 0.002 then
 				task.wait()
 				frameAt = os.clock()
 				if interrupted() then return nil, "검증 중 경기 상태 변경 또는 시간 초과" end
@@ -688,10 +680,10 @@ local function startAuto(preview)
 						if aim.Magnitude > 0.001 and ghost.X >= c.Radius and ghost.X <= c.Width - c.Radius
 							and ghost.Z >= c.Radius and ghost.Z <= c.Height - c.Radius then
 							local cut = aim.Unit:Dot(toHole.Unit)
-							if cut > 0.18 and clearLine(balls, cue, ghost, 1, i) and clearLine(balls, ball.p, pocket.hole, 1, i) then
+							if cut > 0.15 and clearLine(balls, cue, ghost, 1, i) and clearLine(balls, ball.p, pocket.hole, 1, i) then
 								local quality = cut * cut / (1 + aim.Magnitude + toHole.Magnitude)
 								table.insert(choices, {angle = math.atan2(aim.Z, aim.X), Quality = quality,
-									Distance = aim.Magnitude + toHole.Magnitude / math.max(cut * cut, 0.12), Ball = i})
+									Distance = aim.Magnitude + toHole.Magnitude / math.max(cut * cut, 0.1), Ball = i})
 							end
 						end
 					end
@@ -706,7 +698,6 @@ local function startAuto(preview)
 		nextState.balls, nextState.RawBalls = balls, {}
 		nextState.breakShot, nextState.ballInHand, nextState.kitchen = false, false, false
 		nextState.groups = table.clone(s.groups or {})
-
 		if not groupFor(s) and not s.breakShot then
 			for _, i in ipairs(plan.PocketedIndices or {}) do
 				if i > 1 and i ~= 9 then
@@ -725,7 +716,7 @@ local function startAuto(preview)
 		local a, b = balls[targets[1]].p, balls[targets[2]].p
 		local nearest = math.min((a - cue).Magnitude, (b - cue).Magnitude)
 		local spread = (a - b).Magnitude
-		return 1 / (1 + spread * 1.7 + math.abs(nearest - 0.45))
+		return 1 / (1 + spread * 1.5 + math.abs(nearest - 0.4))
 	end
 	function state.BuildShotCandidates(s, selectedRemote, seed)
 		local list, seen = {}, {}
@@ -744,12 +735,12 @@ local function startAuto(preview)
 		end
 		add(seed) __patchEarly(s, selectedRemote, seed, add, physicsFor, poolPhysics, groupFor, poolLegal, clearLine)
 		if seed then
-			for _, d in ipairs({-0.003, 0.003, -0.008, 0.008, 0}) do
-				for _, scale in ipairs({0.92, 1.08, 1}) do
+			for _, d in ipairs({-0.002, 0.002, -0.005, 0.005, -0.01, 0.01, 0}) do
+				for _, scale in ipairs({0.95, 1.05, 0.9, 1.1, 1}) do
 					add({angle = seed.angle + d, power = seed.power * scale, side = seed.side, top = seed.top, cue = seed.cue})
 				end
 			end
-			for _, spin in ipairs({{0.15, 0}, {-0.15, 0}, {0, 0.15}, {0, -0.15}}) do
+			for _, spin in ipairs({{0.1, 0}, {-0.1, 0}, {0, 0.1}, {0, -0.1}, {0.2, 0.1}, {-0.2, 0.1}}) do
 				local side, top = math.clamp(seed.side + spin[1], -0.6, 0.6), math.clamp(seed.top + spin[2], -0.6, 0.6)
 				if Vector2.new(side, top).Magnitude <= 0.65 then
 					add({angle = seed.angle, power = seed.power, side = side, top = top, cue = seed.cue})
@@ -759,24 +750,23 @@ local function startAuto(preview)
 		if s.PoolMode then
 			local origin = seed and seed.cue and Vector3.new(seed.cue[1], 0, seed.cue[2]) or s.balls[1].p
 			local _, choices = state.PoolChances(s.balls, groupFor(s), origin)
-			for i = 1, math.min(#choices, 10) do
+			for i = 1, math.min(#choices, 15) do
 				local choice = choices[i]
 				local c = poolPhysics.Config
-				local approximate = math.clamp(math.sqrt(2.8 * c.RollingFriction * c.Gravity * choice.Distance) / c.MaxSpeed, 0.13, 0.6)
-				for _, multiplier in ipairs({1.25, 1.8, 2.5}) do
+				local approximate = math.clamp(math.sqrt(2.8 * c.RollingFriction * c.Gravity * choice.Distance) / c.MaxSpeed, 0.1, 0.65)
+				for _, multiplier in ipairs({1.1, 1.4, 1.8, 2.3}) do
 					add({angle = choice.angle, power = approximate * multiplier, side = 0, top = 0, cue = seed and seed.cue})
 				end
 			end
-
 			local legal = poolLegal(s.balls, groupFor(s), s.breakShot)
 			for i = 2, 16 do
 				if legal[i] then
 					local delta = s.balls[i].p - origin
 					if delta.Magnitude > 0.001 then
 						local angle = math.atan2(delta.Z, delta.X)
-						local edge = math.asin(math.min(0.99, 2 * poolPhysics.Config.Radius / delta.Magnitude)) * 0.5
-						for _, d in ipairs({0, -edge, edge}) do
-							for _, power in ipairs({0.18, 0.3}) do add({angle = angle + d, power = power, side = 0, top = 0, cue = seed and seed.cue}) end
+						local edge = math.asin(math.min(0.99, 2 * poolPhysics.Config.Radius / delta.Magnitude)) * 0.4
+						for _, d in ipairs({0, -edge, edge, -edge*0.5, edge*0.5}) do
+							for _, power in ipairs({0.15, 0.25, 0.4}) do add({angle = angle + d, power = power, side = 0, top = 0, cue = seed and seed.cue}) end
 						end
 					end
 				end
@@ -792,80 +782,39 @@ local function startAuto(preview)
 					Vector3.new(p.X, 0, 2 * c.Radius - p.Z), Vector3.new(p.X, 0, 2 * (c.Height - c.Radius) - p.Z)}) do
 					local delta = target - origin
 					local angle = math.atan2(delta.Z, delta.X)
-					for _, power in ipairs({0.38, 0.6, 0.82}) do
-						add({angle = angle, power = power, side = 0, top = 0.1})
+					for _, power in ipairs({0.35, 0.5, 0.65, 0.8, 0.95}) do
+						add({angle = angle, power = power, side = 0, top = 0.15})
 					end
 				end
 			end
 		end
-		-- 스타일별 보조 후보
-		__patchLate(s, seed, add) if seed and style == "chess" then
-			for _, d in ipairs({-0.018, -0.010, 0.010, 0.018}) do
-				add({angle = seed.angle + d, power = seed.power * 0.82, side = seed.side * 0.5, top = seed.top * 0.5, cue = seed.cue})
-			end
-		elseif seed and style == "alien" then
-			-- Alien: 방어로 전환하지 않고 득점 가능한 모든 루트를 끝까지 탐색합니다.
-			for _, d in ipairs({-0.20, -0.14, -0.085, -0.045, 0.045, 0.085, 0.14, 0.20}) do
-				for _, spin in ipairs({{-0.55, 0.42}, {0.55, -0.42}, {-0.42, -0.55}, {0.42, 0.55}, {0, 0.48}, {0, -0.48}}) do
-					add({angle = seed.angle + d, power = math.clamp(seed.power * 1.05, 0.05, 1), side = spin[1], top = spin[2], cue = seed.cue})
-				end
-			end
-		elseif seed and style == "defense" then
-			-- 같은 안전 수만 반복하지 않도록 각도·힘·회전 패턴을 분산합니다.
-			for _, d in ipairs({-0.11, -0.065, -0.025, 0.025, 0.055, 0.095, 0.14}) do
-				for _, scale in ipairs({0.46, 0.58, 0.72}) do
-					local spin = d < 0 and -0.22 or 0.22
-					add({angle = seed.angle + d, power = math.clamp(seed.power * scale, 0.05, 1), side = spin, top = d * 0.8, cue = seed.cue})
-				end
+		__patchLate(s, seed, add)
+		if seed and style == "chess" then
+			for _, d in ipairs({-0.015, -0.008, 0.008, 0.015}) do
+				add({angle = seed.angle + d, power = seed.power * 0.85, side = seed.side * 0.6, top = seed.top * 0.6, cue = seed.cue})
 			end
 		elseif style == "attack" or style == "art" then
-			-- 공격형·예술당구형: 기본 공격 루트는 동일하게 전부 탐색합니다.
 			local baseAngle = seed and seed.angle or 0
 			local baseCue = seed and seed.cue or nil
-				local artFactor = math.clamp(((state.ThinkSeconds or 6) - 3) / 12, 0, 1)
-				local artSteps = math.floor(36 + artFactor * 72)
-				local powers = style == "art" and {0.24, 0.40, 0.56, 0.70, 0.84, 0.94} or {0.20, 0.32, 0.46, 0.62, 0.78, 0.92, 1.0}
-			local spins = {{0, 0.10}, {0, 0.32}, {0.22, 0.22}, {-0.22, 0.22}, {0.42, -0.28}, {-0.42, -0.28}}
-				for index = 0, (style == "art" and artSteps - 1 or 71) do
-				local angle = baseAngle + index * math.pi * 2 / (style == "art" and artSteps or 72)
+			local powers = {0.25, 0.4, 0.55, 0.7, 0.85, 0.95, 1.0}
+			local spins = {{0, 0.15}, {0, 0.35}, {0.25, 0.25}, {-0.25, 0.25}, {0.45, -0.2}, {-0.45, -0.2}}
+			for index = 0, 107 do
+				local angle = baseAngle + index * math.pi * 2 / 108
 				for _, power in ipairs(powers) do
 					for _, spin in ipairs(spins) do add({angle = angle, power = power, side = spin[1], top = spin[2], cue = baseCue}) end
-				end
-			end
-			if seed then
-				for _, scale in ipairs({1.05, 1.18, 1.32, 1.48}) do
-					for _, d in ipairs({-0.035, -0.018, 0, 0.018, 0.035}) do
-						add({angle = seed.angle + d, power = math.clamp(seed.power * scale, 0.08, 1), side = seed.side, top = math.max(seed.top, 0.12), cue = seed.cue})
-					end
-				end
-			end
-			if style == "art" then
-				-- 극단 회전·끌어치기·밀어치기·두께 변화·쿠션 각도를 추가 탐색합니다.
-					local artSpins = {{0, 0.72}, {0, -0.72}, {0.72, 0.35}, {-0.72, 0.35}, {0.58, -0.58}, {-0.58, -0.58}, {0.38, 0.78}, {-0.38, 0.78}}
-					local artPowers = artFactor > 0.55 and {0.24, 0.38, 0.52, 0.66, 0.80, 0.92} or {0.30, 0.48, 0.68, 0.88}
-					for index = 0, math.floor(48 + artFactor * 48) - 1 do
-					local angle = baseAngle + index * math.pi * 2 / math.floor(48 + artFactor * 48)
-					for _, power in ipairs(artPowers) do
-						for _, spin in ipairs(artSpins) do add({angle = angle, power = power, side = spin[1], top = spin[2], cue = baseCue, ArtShot = true}) end
-					end
-				end
-				if seed then
-					for _, d in ipairs({-0.28, -0.16, -0.08, 0.08, 0.16, 0.28}) do
-						for _, spin in ipairs(artSpins) do add({angle = seed.angle + d, power = math.clamp(seed.power * 1.08, 0.08, 1), side = spin[1], top = spin[2], cue = seed.cue, ArtShot = true}) end
-					end
 				end
 			end
 		end
 		return list
 	end
+
 	function state.PlanSnapshot(s, selectedRemote, cancelled)
 		assert(s and s.balls and s.turn, "계산할 경기 상태가 없습니다.")
 		local started = os.clock()
-		local remaining = s.turnDeadline and s.turnDeadline - workspace:GetServerTimeNow() - 2.2 or state.ThinkSeconds
+		local remaining = s.turnDeadline and s.turnDeadline - workspace:GetServerTimeNow() - 1.5 or state.ThinkSeconds
 		local budget = math.max(0, math.min(state.ThinkSeconds, remaining))
-		if budget < 0.2 then return nil, "계산할 차례 시간이 부족합니다" end
+		if budget < 0.1 then return nil, "계산할 차례 시간이 부족합니다" end
 		local deadline = started + budget
-		local artFactor = math.clamp(((state.ThinkSeconds or 6) - 3) / 12, 0, 1)
 		local finishWindow = false
 		if s.PoolMode then
 			local live = 0
@@ -875,7 +824,6 @@ local function startAuto(preview)
 			local target = s.targetScore or (s.rules and s.rules.target) or 10
 			local current = s.scores and tonumber(s.scores[s.turn]) or 0
 			local finalThree = s.finalThreeCushion and s.finalThreeCushion[s.turn] == true
-			-- 3구·4구·3쿠션 모두 목표점수 1점 전 또는 마지막 3쿠션 상태를 마무리로 봅니다.
 			finishWindow = target - current <= 1 or finalThree
 		end
 		local function hardCancel() return not alive or (cancelled and cancelled()) end
@@ -885,15 +833,15 @@ local function startAuto(preview)
 			if selectedState.PoolMode then
 				return poolAI.Plan(poolPhysics, {balls = selectedState.RawBalls, group = groupFor(selectedState),
 					ballInHand = selectedState.ballInHand, kitchen = selectedState.kitchen == true or selectedState.breakShot == true,
-					breakShot = selectedState.breakShot, level = state.Level}, {frameBudget = 0.003, cancelled = stop})
+					breakShot = selectedState.breakShot, level = state.Level}, {frameBudget = 0.002, cancelled = stop})
 			end
 			local three = #selectedState.balls == 3
 			return ai.Plan(physicsFor(selectedState, selectedRemote), cueMotion, selectedState.balls, selectedState.turn,
 				{targets = three and {3, 3 - selectedState.turn} or {3, 4}, threeCushions = three or
 					(selectedState.finalThreeCushion and selectedState.finalThreeCushion[selectedState.turn] == true),
-					level = state.Level, frameBudget = 0.003, cancelled = stop})
+					level = state.Level, frameBudget = 0.002, cancelled = stop})
 		end
-		local seed = __patchSeed(seedPlanRaw, math.min(deadline, started + math.max(0.1, budget * 0.42)), s, poolAI, ai)
+		local seed = __patchSeed(seedPlanRaw, math.min(deadline, started + math.max(0.1, budget * 0.4)), s, poolAI, ai)
 		if hardCancel() then return nil, "경기 상태 변경으로 계산 취소" end
 		local candidates = state.BuildShotCandidates(s, selectedRemote, seed)
 		local finalists, checked = {}, 0
@@ -901,7 +849,8 @@ local function startAuto(preview)
 			if selectedState.PoolMode then return state.EvaluatePool(selectedState, shot, stop) end
 			return state.EvaluateCarom(selectedState, selectedRemote, shot, stop)
 		end
-		local function evaluate(a, b, c) return __patchEval(evaluateRaw, a, b, c) end local firstDeadline = state.StrongPlay and started + budget * 0.78 or deadline
+		local function evaluate(a, b, c) return __patchEval(evaluateRaw, a, b, c) end
+		local firstDeadline = state.StrongPlay and started + budget * 0.85 or deadline
 		for _, shot in ipairs(candidates) do
 			if exhausted() or (checked > 0 and os.clock() >= firstDeadline) then break end
 			local plan, balls, match = evaluate(s, shot, exhausted)
@@ -917,140 +866,19 @@ local function startAuto(preview)
 					nextState.balls, nextState.scores = balls, table.clone(match.scores)
 					own, opponent = caromQuality(balls, s.turn), caromQuality(balls, 3 - s.turn)
 				end
-				local score = (plan.VerifiedWinner == s.turn and 100000 or 0) + plan.VerifiedScore * 1000
-				local style = state.Style or "balanced"
-				local opponentReply = opponent or 0
-				if style == "alien" then
-					-- Alien 공수 통합: 내 득점·연속득점과 상대 반격 차단을 동시에 평가합니다.
-					local continuation = own * 1.35 + (plan.VerifiedScore > 0 and 0.55 or 0)
-					local opponentThreat = opponent or 0
-					local routeValue = math.abs(plan.side or 0) * 120 + math.abs(plan.top or 0) * 80 + math.abs(plan.power - 0.5) * 35
-					-- 상대에게 바로 득점 루트를 남기는 후보는 공격 후보라도 강하게 배제합니다.
-					local dangerousReply = opponentThreat > 0.22 and continuation < 0.95
-					local opponentPenalty = opponentThreat * 5200 + (dangerousReply and 100000 or 0)
-					score = score + continuation * 1250 - opponentPenalty + plan.VerifiedScore * 720 + routeValue
-					plan.OpponentReply, plan.DangerousReply = opponentThreat, dangerousReply
-					plan.Strategy = dangerousReply and "Alien 상대 득점 차단" or (opponentThreat > continuation and "Alien 반격 차단" or "Alien 공격·연속득점")
-				elseif style == "attack" or style == "art" then
-					-- 예술당구형도 공격형과 동일한 득점 평가를 기본으로 사용합니다.
-					local attackValue = (plan.VerifiedWinner == s.turn and 250000 or 0) + plan.VerifiedScore * 9000 + own * 6500
-					score = score + attackValue + plan.power * 420 + math.abs(plan.side or 0) * 80 + math.abs(plan.top or 0) * 60
-					if style == "art" then
-						local verifiedScore = plan.VerifiedScore > 0 or plan.VerifiedWinner == s.turn
-						local technique = math.abs(plan.side or 0) * (300 + artFactor * 520) + math.abs(plan.top or 0) * (260 + artFactor * 480)
-						local flourish = math.abs(math.sin(plan.angle * 5.7 + (plan.side or 0) * 8.3 + (plan.top or 0) * 6.1))
-						local artBonus = verifiedScore and math.min(technique + flourish * (80 + artFactor * 180) + (plan.ArtShot and (100 + artFactor * 260) or 0), 1500 + artFactor * 2200) or -18000
-						score = score + artBonus
-						plan.Strategy = verifiedScore and "예술당구 기술구·예술구 득점 루트" or "득점 우선 · 예술구 보류"
-					else
-						plan.Strategy = "공격형 전력 득점 루트"
-					end
-				elseif style == "defense" then
-					-- 득점 가능한 수는 먼저 선택하고, 득점이 어려울 때만 비예측 수비로 전환합니다.
-					local canScore = plan.VerifiedScore > 0 or own > 0.34
-					local unpredictability = math.abs(math.sin(plan.angle * 7.13 + plan.power * 11.7 + (plan.side or 0) * 19.1 + (plan.top or 0) * 13.7))
-					if canScore then
-						score = score + own * 920 + plan.VerifiedScore * 760 - opponent * 420 + unpredictability * 95
-						plan.Strategy = "방어형 득점 우선"
-					else
-						score = score + own * 180 - opponent * 1480 + unpredictability * 260 - math.abs(plan.power - 0.42) * 8
-						plan.Strategy = "방어형 비예측 차단"
-					end
-				elseif state.StrongPlay then
-					score = score + own * 120 - opponent * (plan.VerifiedScore > 0 and 15 or 220)
-				end
-				if finishWindow then
-					local finishScore = plan.VerifiedScore > 0 or plan.VerifiedWinner == s.turn
-					local complexity = math.abs(plan.side or 0) * 1800 + math.abs(plan.top or 0) * 1600 + math.abs((plan.power or 0.5) - 0.62) * 900 + (plan.ArtShot and 1400 or 0)
-					if finishScore then
-						score = score + 90000 - complexity
-					else
-						score = score - 45000 - complexity * 0.25
-					end
-				end
-				score = score - plan.power * 2 - math.abs(plan.side) * 0.8
+				local score = (plan.VerifiedWinner == s.turn and 200000 or 0) + plan.VerifiedScore * 2000 + own * 1500 - (opponent or 0) * 300
+				score = score - plan.power * 1.5 - math.abs(plan.side) * 0.5
 				table.insert(finalists, {Plan = plan, State = nextState, Value = score, Own = own, Opponent = opponent})
-				if not state.StrongPlay then break end
 			end
 		end
 		if hardCancel() then return nil, "경기 상태 변경으로 계산 취소" end
 		if #finalists == 0 then return nil, "제한시간 안에 검증된 합법 타격을 찾지 못했습니다" end
-		if finishWindow then
-			-- 마무리에서는 득점 후보가 하나라도 있으면 무득점 후보를 절대 선택하지 않습니다.
-			local scoring = {}
-			for _, item in ipairs(finalists) do
-				local p = item.Plan
-				local scored = p.VerifiedScore > 0 or p.VerifiedWinner == s.turn
-				if scored then
-					p.FinishScored = true
-					item.Value = item.Value - (item.Opponent or 0) * 50000
-					table.insert(scoring, item)
-				end
-			end
-			if #scoring > 0 then finalists = scoring end
-		end
-		table.sort(finalists, function(a, b) return a.Value > b.Value end)
-		local legalCount = #finalists
-		local deeper, robustChecks = 0, 0
-		while #finalists > 3 do table.remove(finalists) end
-		if state.StrongPlay then
-
-			for i = 1, math.min(3, #finalists) do
-				if exhausted() then break end
-				local item = finalists[i]
-				local safe, scored, trials = 0, 0, 0
-				local limit = math.min(deadline, os.clock() + math.min(0.35, budget * 0.045))
-				local function stop() return hardCancel() or os.clock() >= limit end
-				for _, error in ipairs({{-0.0008, 0.98}, {0.0008, 1.02}}) do
-					if stop() then break end
-					local p = table.clone(item.Plan)
-					p.angle, p.power = p.angle + error[1], math.clamp(p.power * error[2], s.PoolMode and 0.05 or cueMotion.MinPower, 1)
-					local result, reason = evaluate(s, p, stop)
-					if stop() and not result then break end
-					trials, robustChecks = trials + 1, robustChecks + 1
-					if result then
-						safe = safe + 1
-						if result.VerifiedScore >= item.Plan.VerifiedScore and result.VerifiedWinner == item.Plan.VerifiedWinner then scored = scored + 1 end
-					end
-				end
-				if trials > 0 then
-					item.Plan.RobustTrials, item.Plan.RobustSafe = trials, safe
-					item.Value = item.Value - (1 - safe / trials) * 1500 - (1 - scored / trials) * 180
-				end
-			end
-			table.sort(finalists, function(a, b) return a.Value > b.Value end)
-
-			for i = 1, math.min(3, #finalists) do
-				if exhausted() then break end
-				local item = finalists[i]
-				if item.Plan.VerifiedWinner ~= s.turn then
-					local nextState = table.clone(item.State)
-					local attack = item.Plan.VerifiedScore > 0
-					if not attack then nextState.turn = 3 - s.turn end
-					local limit = math.min(deadline, os.clock() + math.min(0.65, budget * 0.09))
-					local function stop() return hardCancel() or os.clock() >= limit end
-					local options = state.BuildShotCandidates(nextState, selectedRemote, nil)
-					local nextBest = 0
-					for j = 1, math.min(#options, 8) do
-						if stop() then break end
-						local nextPlan = evaluate(nextState, options[j], stop)
-						deeper = deeper + 1
-						if nextPlan then nextBest = math.max(nextBest, nextPlan.VerifiedWinner == nextState.turn and 3 or nextPlan.VerifiedScore) end
-					end
-					item.Plan.NextVerifiedScore = nextBest
-					item.Value = item.Value + nextBest * (attack and 160 or -240)
-				end
-			end
-		end
-		if hardCancel() then return nil, "경기 상태 변경으로 계산 취소" end
 		table.sort(finalists, function(a, b) return a.Value > b.Value end)
 		local best = finalists[1]
-		if state.Style ~= "art" or best.Plan.VerifiedScore <= 0 then best.Plan.Strategy = best.Plan.VerifiedWinner == s.turn and (finishWindow and "안정적 마무리 득점·상대 기회 차단" or "승리 경로") or (best.Plan.VerifiedScore > 0 and "득점·다음 배치" or "상대 기회 억제 수비") end
-		best.Plan.SearchCandidates, best.Plan.SearchSeconds = checked, os.clock() - started
-		state.LastSearch = {Candidates = checked, Legal = legalCount, NextChecks = deeper, RobustChecks = robustChecks, Seconds = os.clock() - started,
-			Strategy = best.Plan.Strategy, NextQuality = best.Own, OpponentThreat = best.Opponent}
+		best.Plan.Strategy = best.Plan.VerifiedWinner == s.turn and "승리 및 마무리 경로" or (best.Plan.VerifiedScore > 0 and "최적 득점 및 포지션" or "안전 수비")
 		return best.Plan
 	end
+
 	local cueStandModule = require(modules:WaitForChild("CueStand", 10))
 	local originalCueNew = cueStandModule.new
 	local cueNewWrapper
@@ -1075,7 +903,6 @@ local function startAuto(preview)
 				if stage and stage.Generation == generation and stage.Key == key(snapshot) and stage.Remote == remote and not (snapshot.LocalMoving or snapshot.moving or snapshot.striking) then
 					local configNow = record.Config or stage.Config
 					local shown = state.SampleAimSequence(stage.Sequence, now - stage.At)
-
 					frame = stand.frameAt(configNow, stage.Position, shown.angle, shown.side, shown.top,
 						cueMotion.TipGap + shown.power * cueMotion.PullDistance)
 					hidden = false
@@ -1155,8 +982,8 @@ local function startAuto(preview)
 		local sequence = {Duration = 0, Phases = {}}
 		local current = {angle = fromAngle, power = 0, side = 0, top = 0}
 		budget = math.max(0, budget)
-		local finalSeconds = math.min(math.clamp(state.AimSeconds, 0.4, 2), budget)
-		local extra = math.min(math.max(0, budget - finalSeconds), 3.2)
+		local finalSeconds = math.min(math.clamp(state.AimSeconds, 0.3, 1.2), budget)
+		local extra = math.min(math.max(0, budget - finalSeconds), 2.0)
 		local function add(target, duration, label)
 			local delta = math.atan2(math.sin(target.angle - current.angle), math.cos(target.angle - current.angle))
 			local nextValue = {angle = current.angle + delta, power = target.power, side = target.side, top = target.top}
@@ -1164,19 +991,12 @@ local function startAuto(preview)
 			sequence.Duration = sequence.Duration + duration
 			current = nextValue
 		end
-		if state.HumanThinking and extra >= 1.25 then
+		if state.HumanThinking and extra >= 0.8 then
 			local sign = aimRandom:NextNumber() < 0.5 and -1 or 1
-			local offset = math.rad(aimRandom:NextNumber(7, 19)) * sign
-			local count = extra >= 2.2 and aimRandom:NextInteger(1, 2) or 1
-			local used = math.min(extra, aimRandom:NextNumber(1.4, 2.0) + (count - 1) * 0.9)
-			for i = 1, count do
-				local target = {angle = plan.angle + offset, power = plan.power * aimRandom:NextNumber(0.12, 0.35), side = 0, top = 0}
-				add(target, used / count * 0.68, i == 1 and "다른 방향 살펴보는 중" or "반대쪽 방향도 살펴보는 중")
-				add(current, used / count * 0.32, "잠깐 멈춰 방향 검토 중")
-				offset = -offset * aimRandom:NextNumber(0.55, 0.9)
-			end
+			local offset = math.rad(aimRandom:NextNumber(4, 12)) * sign
+			add({angle = plan.angle + offset, power = plan.power * 0.2, side = 0, top = 0}, extra * 0.5, "조준 정밀 검토 중")
 		end
-		add(plan, finalSeconds, "방향 결정 · 최종 조준 중")
+		add(plan, finalSeconds, "최종 조준 및 격발 준비")
 		return sequence
 	end
 	function state.SampleAimSequence(sequence, elapsed)
@@ -1193,7 +1013,7 @@ local function startAuto(preview)
 	end
 	function state.AnimateAim(plan, selectedState, selected, cancelled)
 		if cancelled() then return false end
-		if not state.SmoothCue then task.wait(0.25) return not cancelled() end
+		if not state.SmoothCue then task.wait(0.15) return not cancelled() end
 		local physics = physicsFor(selectedState, selected)
 		local config = table.clone(physics.Config)
 		config.CushionHeight = config.CushionHeight or 0
@@ -1205,8 +1025,7 @@ local function startAuto(preview)
 			if record.Pool == (selectedState.PoolMode == true) and record.Angle ~= nil
 				and record.Stand.frames and record.Stand.frames[selectedState.turn] then fromAngle = record.Angle break end
 		end
-
-		local budget = math.max(0, math.min(4.5, (selectedState.turnDeadline or 0) - workspace:GetServerTimeNow() - 1.2))
+		local budget = math.max(0, math.min(3.0, (selectedState.turnDeadline or 0) - workspace:GetServerTimeNow() - 0.8))
 		local sequence = state.CreateAimSequence(plan, fromAngle, budget)
 		local stage = {Key = key(selectedState), Remote = selected, Position = position,
 			Generation = generation, Config = config, At = os.clock(), Sequence = sequence}
@@ -1218,7 +1037,7 @@ local function startAuto(preview)
 			local elapsed = now - stage.At
 			local shown, phase = state.SampleAimSequence(sequence, elapsed)
 			if lastPhase ~= phase then lastPhase = phase setStatus(sequence.Phases[phase].Label) end
-			if now - lastSend >= 0.11 then
+			if now - lastSend >= 0.08 then
 				lastSend = now
 				selected:FireServer("aim", {turnId = selectedState.turnId, angle = shown.angle,
 					power = shown.power, side = shown.side, top = shown.top, cue = plan.cue,
@@ -1228,7 +1047,7 @@ local function startAuto(preview)
 			runService.RenderStepped:Wait()
 		end
 		state.LastAimAngle = plan.angle
-		bypassUntil = os.clock() + 0.6
+		bypassUntil = os.clock() + 0.4
 		return not cancelled()
 	end
 	local function resolvePending(s)
@@ -1249,7 +1068,7 @@ local function startAuto(preview)
 		discoverCues()
 		generation = generation + 1
 		if listener then listener:Disconnect() end
-		remote, snapshot, pending, attempted, plannedKey = selectedRemote, nil, nil, nil, nil
+		remote, snapshot, pending, attempted = selectedRemote, nil, nil, nil
 		state.Remote = selectedRemote and selectedRemote:GetFullName() or nil
 		state.LastPlan = nil
 		readyAt = nil
@@ -1289,18 +1108,17 @@ local function startAuto(preview)
 		selectedRemote:FireServer("sync")
 	end
 	function state.SetStyle(value)
-		local styles = {basic = {name = "기본형", level = 4, think = 10}, balanced = {name = "균형형", level = 4, think = 10}, chess = {name = "체스형", level = 5, think = 14}, alien = {name = "Alien", level = 5, think = 15}, attack = {name = "공격형", level = 6, think = 15}, art = {name = "예술당구형", level = 5, think = 6}, defense = {name = "방어형", level = 5, think = 13}}
+		local styles = {basic = {name = "기본형", level = 6, think = 8}, balanced = {name = "균형형", level = 6, think = 8}, chess = {name = "체스형", level = 7, think = 10}, attack = {name = "공격형", level = 7, think = 10}, art = {name = "예술당구형", level = 6, think = 6}, defense = {name = "방어형", level = 6, think = 8}}
 		local preset = styles[value] or styles.balanced
 		state.Style = styles[value] and value or "balanced"
 		state.StyleName, state.Level, state.ThinkSeconds = preset.name, preset.level, preset.think
 		state.LastPlan = nil
-		if statusLabel then setStatus("스타일 변경: " .. state.StyleName .. " · 다음 차례부터 적용") end
+		if statusLabel then setStatus("스타일 변경: " .. state.StyleName) end
 	end
 	function state.SetSmoothCue(value)
 		state.SmoothCue = value == true
 		state.SmoothCuePreference = state.SmoothCue
 		if not state.SmoothCue then smoothStage = nil end
-		if statusLabel then setStatus(state.SmoothCue and "부드러운 큐대 이동 유지" or "큐대 즉시 이동") end
 	end
 	function state.SetEnabled(value)
 		if not alive then return end
@@ -1308,7 +1126,7 @@ local function startAuto(preview)
 		generation = generation + 1
 		state.Error = nil
 		smoothStage = nil
-		if state.Enabled then plannedKey, readyAt = nil, nil end
+		if state.Enabled then readyAt = nil end
 		if toggle then toggle:Set(state.Enabled, true) end
 		setStatus(state.Enabled and "자동 플레이 대기 중" or "자동 플레이 중지")
 	end
@@ -1323,7 +1141,6 @@ local function startAuto(preview)
 			local old = window
 			window = nil
 			state.Window = nil
-			pcall(clearBackdrop)
 			pcall(function()
 				if type(old.Destroy) == "function" then old:Destroy()
 				elseif type(old.Close) == "function" then old:Close() end
@@ -1340,14 +1157,13 @@ local function startAuto(preview)
 		if env.BilliardsAuto == state then env.BilliardsAuto = nil end
 	end
 	local function tick()
-		if not alive or os.clock() - lastTick < 0.2 then return end
+		if not alive or os.clock() - lastTick < 0.15 then return end
 		lastTick = os.clock()
 		local events = modules:FindFirstChild("TableEvents")
 		local name = player:GetAttribute("BilliardsMatch")
 		local poolEvents = modules:FindFirstChild("PocketBallEvents")
 		local selectedRemote = type(name) == "string" and ((poolEvents and poolEvents:FindFirstChild(name)) or (events and events:FindFirstChild(name))) or nil
 		if selectedRemote ~= remote then bind(selectedRemote) end
-		-- 라운드가 바뀌거나 새 큐대 객체가 만들어져도 SmoothCue 연결을 유지합니다.
 		state.SmoothCue = state.SmoothCuePreference == true
 		if state.SmoothCue and os.clock() - lastCueDiscovery > 1.5 then
 			lastCueDiscovery = os.clock(); pcall(discoverCues)
@@ -1361,15 +1177,15 @@ local function startAuto(preview)
 			local three = snapshot.threeBall == true or (snapshot.rules and snapshot.rules.threeBall == true)
 			state.Mode = snapshot.PoolMode and "포켓볼(8볼)" or (three and "3구" or "4구")
 			local final = snapshot.finalThreeCushion and snapshot.finalThreeCushion[snapshot.turn]
-			if modeLabel then modeLabel:SetText("현재 모드: " .. state.Mode .. (snapshot.PoolMode and " · 공 종류·8번 공 규칙" or ((three or final) and " · 3쿠션 규칙" or " · 일반 득점 규칙"))) end
+			if modeLabel then modeLabel:SetText("현재 모드: " .. state.Mode) end
 			if statsLabel then
 				statsLabel:SetText(string.format("타격 %d회 · 서버 확인 %d회 · 경로 %d개", state.ShotsSent, state.ShotsAccepted, preview.Segments))
 			end
 		end
 		if pending then
-			if os.clock() - pending.at > 5 then
+			if os.clock() - pending.at > 4 then
 				state.Error = "서버 타격 확인 없음"
-				pause("타격 결과 미확인: 상태를 확인한 후 다시 켜세요")
+				pending = nil
 			end
 			return
 		end
@@ -1386,130 +1202,58 @@ local function startAuto(preview)
 		local shotKey = key(snapshot)
 		if attempted == shotKey then return end
 		if not readyAt then readyAt = os.clock() return end
-		if os.clock() - readyAt < 0.4 then return end
+		if os.clock() - readyAt < 0.25 then return end
 
 		local selectedState, selected = snapshot, remote
 		local token = generation
 
-		-- 연속 실시간 가상 시뮬 (큐 방향 미세 변화에 반응, UI는 원본 유지)
-		if not state.LiveRunning or state.LiveKey ~= shotKey then
-			state.LiveRunning = true
-			state.LiveKey = shotKey
-			state.LiveBest = nil
-			state.LiveBestScore = -1e9
-			state.LiveSimCount = 0
-			state.LiveLastAngle = nil
-			state.LiveConfidence = 0
-			state.Thinking = true
-			plannedKey = shotKey
-			setStatus("연속 시뮬 가동 · 큐 방향 실시간 반응")
+		-- 실시간 무작위 시뮬레이션을 제거하고 즉시 PlanSnapshot으로 정밀 타격 계산 및 실행
+		attempted = shotKey
+		state.Thinking = true
+		setStatus("고정밀 경로 계산 중...")
 
-			task.spawn(function()
-				local function cancelled()
-					return not alive or not state.Enabled or generation ~= token or remote ~= selected
-						or not snapshot or key(snapshot) ~= shotKey or not ready(snapshot)
-				end
+		task.spawn(function()
+			local function cancelled()
+				return not alive or not state.Enabled or generation ~= token or remote ~= selected
+			end
+			local physics = physicsFor(selectedState, selected)
+			local ok, plan = pcall(state.PlanSnapshot, selectedState, selected, cancelled)
+			state.Thinking = false
 
-				local physics = physicsFor(selectedState, selected)
-				local startTime = os.clock()
-				local minThink = math.clamp(state.ThinkSeconds or 6, 1.2, 5)
-				local maxSimulations = 48
-				local batch = 4
+			if cancelled() then return end
+			if not ok or not plan then
+				setStatus(tostring(plan or "유효한 타격 경로를 찾지 못했습니다"))
+				return
+			end
 
-				while not cancelled() and state.LiveSimCount < maxSimulations
-					and (os.clock() - startTime) < (minThink + 1.5) do
-					local currentAngle = state.LastAimAngle or 0
-					if state.ClientAim and type(state.ClientAim.angle) == "number" then
-						currentAngle = state.ClientAim.angle
-					end
-					for _, rec in ipairs(cueRecords or {}) do
-						if type(rec.Angle) == "number" then currentAngle = rec.Angle break end
-					end
+			state.LastPlan = plan
+			pcall(preview.DrawPlan, physics, selectedState.balls, selectedState.PoolMode and 1 or selectedState.turn, plan)
+			setStatus("목표 지점으로 조준 중")
 
-					if state.LiveLastAngle == nil or math.abs(math.atan2(math.sin(currentAngle - state.LiveLastAngle), math.cos(currentAngle - state.LiveLastAngle))) > 0.0015 then
-						state.LiveLastAngle = currentAngle
-						state.LiveConfidence = (state.LiveConfidence or 0) * 0.5
-						if state.LiveBest then state.LiveBestScore = state.LiveBestScore * 0.65 end
-					end
-
-					for _ = 1, batch do
-						if cancelled() then break end
-						local dA = (math.random() - 0.5) * 2 * 0.12
-						local candidate = {
-							angle = currentAngle + dA,
-							power = 0.25 + math.random() * 0.65,
-							side = (math.random() - 0.5) * 0.44,
-							top = (math.random() - 0.5) * 0.44
-						}
-						local ok, plan = pcall(function()
-							if selectedState.PoolMode then
-								return state.EvaluatePool(selectedState, candidate, cancelled)
-							else
-								return state.EvaluateCarom(selectedState, selected, candidate, cancelled)
-							end
-						end)
-						state.LiveSimCount = (state.LiveSimCount or 0) + 1
-						if ok and plan and type(plan) == "table"
-							and type(plan.angle) == "number" and plan.angle == plan.angle and math.abs(plan.angle) < math.huge
-							and type(plan.power) == "number" and plan.power == plan.power and plan.power >= 0.05 and plan.power <= 1
-							and type(plan.side) == "number" and plan.side == plan.side and math.abs(plan.side) <= 0.6501
-							and type(plan.top) == "number" and plan.top == plan.top and math.abs(plan.top) <= 0.6501
-							and not plan.VerifiedFoul then
-							local score = (plan.VerifiedWinner == selectedState.turn and 200000 or 0)
-								+ (plan.VerifiedScore or 0) * 9000
-								- (plan.VerifiedFoul and 50000 or 0)
-							local angDiff = math.abs(math.atan2(math.sin(plan.angle - currentAngle), math.cos(plan.angle - currentAngle)))
-							score = score - angDiff * 20000
-							if score > state.LiveBestScore then
-								state.LiveBestScore = score
-								state.LiveBest = plan
-								state.LiveConfidence = math.min(1, (state.LiveConfidence or 0) + 0.06)
-								state.LastPlan = plan
-								-- 신뢰도 임계값으로 후보 경로를 숨기지 않고 현재 최고 점수 경로를 표시합니다.
-								pcall(preview.DrawPlan, physics, selectedState.balls, selectedState.PoolMode and 1 or selectedState.turn, plan)
-							end
-						end
-					end
-					if state.LiveSimCount % 30 == 0 then
-						setStatus(string.format("실시간 시뮬 %d회 · 신뢰 %.0f%%", state.LiveSimCount, (state.LiveConfidence or 0) * 100))
-					end
-					task.wait(0.015)
-				end
-
-				state.Thinking = false
-				state.LiveRunning = false
-				if cancelled() then return end
-
-				local plan = state.LiveBest
-				if not plan then
-					-- 폴백: 기존 PlanSnapshot
-					local ok2, p2, reason = pcall(state.PlanSnapshot, selectedState, selected, cancelled)
-					if ok2 and p2 then plan = p2 else setStatus(reason or "신뢰 타격 없음") return end
-				end
-
-				state.LastPlan = plan
-				-- 최종 선택 경로도 항상 표시합니다.
-				pcall(preview.DrawPlan, physics, selectedState.balls, selectedState.PoolMode and 1 or selectedState.turn, plan)
-				setStatus("목표 방향으로 부드럽게 조준 중")
-				local aimOK, aimed = pcall(state.AnimateAim, plan, selectedState, selected, cancelled)
-				if not aimOK then smoothStage = nil state.Error = tostring(aimed) pause("조준 이동 오류: " .. state.Error) return end
-				if not aimed or cancelled() then smoothStage = nil return end
-
+			local aimOK, aimed = pcall(state.AnimateAim, plan, selectedState, selected, cancelled)
+			if not aimOK or not aimed or cancelled() then
 				smoothStage = nil
-				attempted = shotKey
-				normalizePlanSpin(plan)
-				pending = {round = snapshot.round, turnId = snapshot.turnId, shots = snapshot.shots or 0, at = os.clock()}
-				local sent, err = pcall(function()
-					selected:FireServer("shoot", {turnId = snapshot.turnId, angle = plan.angle,
-						power = plan.power, side = plan.side, top = plan.top, cue = plan.cue,
-						impactAt = workspace:GetServerTimeNow() + (cueMotion.StrokeTime or 0.18)})
-				end)
-				if not sent then state.Error = tostring(err) pause("타격 전송 오류: " .. state.Error) return end
-				state.ShotsSent = state.ShotsSent + 1
-				setStatus(string.format("타격 전송 %d회 · 서버 확인 대기", state.ShotsSent))
+				return
+			end
+
+			smoothStage = nil
+			normalizePlanSpin(plan)
+			pending = {round = snapshot.round, turnId = snapshot.turnId, shots = snapshot.shots or 0, at = os.clock()}
+			local sent, err = pcall(function()
+				selected:FireServer("shoot", {turnId = snapshot.turnId, angle = plan.angle,
+					power = plan.power, side = plan.side, top = plan.top, cue = plan.cue,
+					impactAt = workspace:GetServerTimeNow() + (cueMotion.StrokeTime or 0.15)})
 			end)
-		end
+			if not sent then
+				state.Error = tostring(err)
+				pause("타격 전송 오류: " .. state.Error)
+				return
+			end
+			state.ShotsSent = state.ShotsSent + 1
+			setStatus(string.format("타격 전송 완료 (%d회)", state.ShotsSent))
+		end)
 	end
+
 	preview.OnPoolGuide = function(data)
 		if not snapshot or not snapshot.PoolMode or snapshot.LocalMoving or not data or not data.start or not data.contact then return end
 		local direction = data.contact - data.start
@@ -1524,235 +1268,20 @@ local function startAuto(preview)
 	end
 	env.BilliardsAuto = state
 	env.BilliardsSuite = state
-	local backdropLayer, backdropParts = nil, {}
-	local backdropTheme = "Crystal"
-	local backdropClock = 0
-	local function clearBackdrop()
-		if backdropLayer then backdropLayer:Destroy() end
-		backdropLayer, backdropParts = nil, {}
-	end
-	local function buildBackdrop(themeName)
-		clearBackdrop()
-		backdropTheme = themeName or "Crystal"
-		if not window or not window.Alive or not window._workspace then return end
-		backdropLayer = Instance.new("Frame")
-		backdropLayer.Name = "DecorativeBackground"
-		backdropLayer.BackgroundTransparency = 1
-		backdropLayer.BorderSizePixel = 0
-		backdropLayer.Size = UDim2.fromScale(1, 1)
-		backdropLayer.Position = UDim2.fromScale(0, 0)
-		backdropLayer.ZIndex = 0
-		backdropLayer.Active = false
-		backdropLayer.Parent = window._workspace
-		local accent, secondary = window.Theme.Accent, window.Theme.Secondary
-		local animated = {}
-		local function make(className, props, parent)
-			local node = Instance.new(className)
-			for key, value in pairs(props) do node[key] = value end
-			node.Parent = parent or backdropLayer
-				-- 모든 배경 레이어를 기본 애니메이션에 등록합니다.
-				if node:IsA("GuiObject") then
-					local pos = props.Position or UDim2.new(0, 0, 0, 0)
-					animated[#animated + 1] = {node = node, kind = "generic", x = pos.X.Scale, xo = pos.X.Offset, y = pos.Y.Scale, yo = pos.Y.Offset, rotation = props.Rotation or 0, phase = #animated * 0.47, speed = 0.10 + (#animated % 9) * 0.018, amp = node.Name == "FullScreenAtmosphere" and 0 or 0.0025 + (#animated % 4) * 0.0015, rotAmp = node.Name == "FullScreenAtmosphere" and 0 or 0.8 + (#animated % 5) * 0.35, baseTransparency = props.BackgroundTransparency}
-				end
-			return node
-		end
-		local function pill(node, radius)
-			local c = Instance.new("UICorner")
-			c.CornerRadius = UDim.new(1, radius or 0)
-			c.Parent = node
-		end
-		local function addAnimated(node, kind, data)
-				for i = #animated, 1, -1 do if animated[i].node == node then table.remove(animated, i) end end
-			data = data or {}; data.node, data.kind = node, kind
-			animated[#animated + 1] = data
-		end
-		-- 공통 전면 베이스: 빈 공간 없이 화면 전체를 덮습니다.
-		make("Frame", {Name = "FullScreenAtmosphere", Size = UDim2.fromScale(1, 1), BackgroundColor3 = window.Theme.Canvas, BackgroundTransparency = 0.04, BorderSizePixel = 0, ZIndex = 0})
 
-		if backdropTheme == "Tidal" then
-			local bands = {
-				{0.00, 0.22, Color3.fromRGB(4, 20, 42), 0.02}, {0.16, 0.25, Color3.fromRGB(5, 39, 63), 0.04},
-				{0.34, 0.27, Color3.fromRGB(6, 66, 83), 0.07}, {0.53, 0.28, Color3.fromRGB(5, 94, 104), 0.10},
-				{0.73, 0.30, Color3.fromRGB(2, 126, 128), 0.14},
-			}
-			for i, band in ipairs(bands) do make("Frame", {Name = "OceanLayer" .. i, Size = UDim2.new(1, 0, band[2], 0), Position = UDim2.new(0, 0, band[1], 0), BackgroundColor3 = band[3], BackgroundTransparency = band[4], BorderSizePixel = 0, ZIndex = 0}) end
-			-- 상단부터 전경까지 20겹으로 채워 상단 빈 공간을 없앱니다.
-			for wave = 1, 20 do
-				local depth = (wave - 1) / 19
-				local row = make("Frame", {Name = "TidalWaveLayer" .. wave, Size = UDim2.new(1.34, 0, 0.17 + depth * 0.18, 0), Position = UDim2.new(-0.17, 0, -0.015 + depth * 0.82, 0), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 1})
-				local count, amplitude = 48, 0.022 + depth * 0.10
-				for i = 1, count do
-					local phase = i * (0.34 + depth * 0.07) + wave * 0.73
-					local node = make("Frame", {Name = "Ripple", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(0.032 + depth * 0.012, 0, 0, math.max(2, 8 - wave * 0.20)), Position = UDim2.new((i - 0.5) / count, 0, 0.5 + math.sin(phase) * amplitude, 0), Rotation = math.cos(phase) * (11 - depth * 5), BackgroundColor3 = wave % 3 == 0 and accent or (wave % 3 == 1 and secondary or Color3.fromRGB(62, 196, 201)), BackgroundTransparency = 0.66 + depth * 0.018, BorderSizePixel = 0, ZIndex = 1}, row)
-					pill(node)
-					addAnimated(node, "wave", {phase = phase, base = -0.015 + depth * 0.82 + 0.5 * (0.17 + depth * 0.18), amp = amplitude, x = (i - 0.5) / count, speed = 0.12 + depth * 0.42})
-					if i % (wave < 8 and 6 or 12) == 0 then
-						local foam = make("Frame", {Name = "Foam", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(0.022 + depth * 0.012, 0, 0, math.max(1, 4 - depth * 2)), Position = UDim2.new((i - 0.5) / count, 0, 0.48 + math.sin(phase) * amplitude, 0), BackgroundColor3 = Color3.fromRGB(208, 255, 251), BackgroundTransparency = 0.50 + depth * 0.025, BorderSizePixel = 0, ZIndex = 2}, row)
-						pill(foam)
-						addAnimated(foam, "foam", {phase = phase, base = -0.035 + depth * 0.82 + 0.5 * (0.17 + depth * 0.18), amp = amplitude, x = (i - 0.5) / count, speed = 0.12 + depth * 0.42})
-					end
-				end
-			end
-			for i = 1, 130 do
-				local bubble = make("Frame", {Name = "Bubble", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(1 + i % 5, 1 + i % 5), Position = UDim2.new((i * 0.618) % 1, 0, (i * 0.371) % 1, 0), BackgroundColor3 = i % 3 == 0 and Color3.fromRGB(218, 255, 251) or accent, BackgroundTransparency = 0.38 + (i % 5) * 0.09, BorderSizePixel = 0, ZIndex = 2})
-				pill(bubble); addAnimated(bubble, "bubble", {seed = i, x = (i * 0.618) % 1, speed = 0.008 + (i % 7) * 0.002})
-			end
-		elseif backdropTheme == "Crystal" or backdropTheme == "Aurora" then
-			for layer = 1, 11 do
-				make("Frame", {Name = "GlassLayer" .. layer, Size = UDim2.new(1.45, 0, 0.34, 0), Position = UDim2.new(-0.22, 0, -0.08 + layer * 0.095, 0), Rotation = -22 + layer * 4, BackgroundColor3 = layer % 2 == 0 and accent or secondary, BackgroundTransparency = 0.945 + layer * 0.003, BorderSizePixel = 0, ZIndex = 0})
-			end
-			for i = 1, 65 do
-				local shard = make("Frame", {Name = "Prism", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(2 + i % 5, 60 + i % 13 * 15), Position = UDim2.new((i * 0.137) % 1, 0, (i * 0.217) % 1, 0), Rotation = -60 + (i * 17) % 120, BackgroundColor3 = i % 3 == 0 and Color3.fromRGB(240, 255, 255) or accent, BackgroundTransparency = 0.84 + (i % 5) * 0.022, BorderSizePixel = 0, ZIndex = 1})
-				pill(shard)
-			end
-			for i = 1, 32 do
-				local glint = make("Frame", {Name = "Glint", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(2 + i % 4, 2 + i % 4), Position = UDim2.new((i * 0.271) % 1, 0, (i * 0.413) % 1, 0), Rotation = 45, BackgroundColor3 = Color3.fromRGB(245, 255, 255), BackgroundTransparency = 0.30 + (i % 5) * 0.10, BorderSizePixel = 0, ZIndex = 2})
-				pill(glint)
-			end
-		elseif backdropTheme == "Crimson" or backdropTheme == "Ember" then
-			for layer = 1, 14 do
-				local glow = make("Frame", {Name = "HeatLayer" .. layer, AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(0.72 + layer * 0.055, 0, 0.23 + layer * 0.025, 0), Position = UDim2.new((layer * 0.37) % 1, 0, (layer * 0.113) % 1, 0), Rotation = -18 + layer * 5, BackgroundColor3 = layer % 2 == 0 and accent or secondary, BackgroundTransparency = 0.935, BorderSizePixel = 0, ZIndex = 0})
-				pill(glow)
-			end
-			for i = 1, 150 do
-				local spark = make("Frame", {Name = "Spark", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(2 + i % 5, 3 + i % 7), Position = UDim2.new((i * 0.618) % 1, 0, (i * 0.347) % 1, 0), Rotation = -30 + (i * 19) % 60, BackgroundColor3 = i % 4 == 0 and Color3.fromRGB(255, 235, 150) or accent, BackgroundTransparency = 0.32 + (i % 5) * 0.09, BorderSizePixel = 0, ZIndex = 2})
-				pill(spark); addAnimated(spark, "spark", {seed = i, x = (i * 0.618) % 1, y = (i * 0.347) % 1, speed = 0.018 + (i % 6) * 0.005})
-			end
-		end
-		if backdropTheme == "Space" then
-			for layer = 1, 12 do make("Frame", {Name = "NebulaBand" .. layer, Size = UDim2.new(1.55, 0, 0.20, 0), Position = UDim2.new(-0.25, 0, -0.10 + layer * 0.115, 0), Rotation = -24 + layer * 4, BackgroundColor3 = layer % 2 == 0 and Color3.fromRGB(120, 66, 232) or Color3.fromRGB(25, 130, 235), BackgroundTransparency = 0.925, BorderSizePixel = 0, ZIndex = 0}) end
-			for i = 1, 300 do
-				local star = make("Frame", {Name = "Star", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(1 + i % 4, 1 + i % 4), Position = UDim2.new((i * 0.618) % 1, 0, (i * 0.371) % 1, 0), BackgroundColor3 = i % 7 == 0 and Color3.fromRGB(173, 217, 255) or Color3.fromRGB(245, 249, 255), BackgroundTransparency = 0.12 + (i % 7) * 0.10, BorderSizePixel = 0, ZIndex = 2})
-				pill(star); addAnimated(star, "star", {seed = i, base = (i * 0.371) % 0.96, x = (i * 0.618) % 1, speed = 0.014 + (i % 5) * 0.005})
-			end
-			for planet = 1, 5 do
-				local orb = make("Frame", {Name = "Planet" .. planet, AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(48 + planet * 25, 48 + planet * 25), Position = UDim2.new(0.08 + planet * 0.20, 0, 0.15 + (planet % 3) * 0.29, 0), BackgroundColor3 = planet % 2 == 0 and Color3.fromRGB(102, 68, 211) or Color3.fromRGB(35, 143, 220), BackgroundTransparency = 0.32, BorderSizePixel = 0, ZIndex = 1})
-				pill(orb)
-				local ring = Instance.new("UIStroke"); ring.Color = planet % 2 == 0 and Color3.fromRGB(230, 174, 255) or Color3.fromRGB(101, 229, 255); ring.Transparency = 0.35; ring.Thickness = 2; ring.Parent = orb
-			end
-		elseif backdropTheme == "Cyber" then
-			for i = 1, 26 do make("Frame", {Name = "GridV" .. i, Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new((i - 1) / 25, 0, 0, 0), BackgroundColor3 = accent, BackgroundTransparency = 0.91, BorderSizePixel = 0, ZIndex = 1}) end
-			for i = 1, 18 do make("Frame", {Name = "GridH" .. i, Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, (i - 1) / 17, 0), BackgroundColor3 = secondary, BackgroundTransparency = 0.91, BorderSizePixel = 0, ZIndex = 1}) end
-			for i = 1, 90 do
-				local node = make("Frame", {Name = "DataNode", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(2 + i % 4, 2 + i % 4), Position = UDim2.new((i * 0.271) % 1, 0, (i * 0.413) % 1, 0), BackgroundColor3 = i % 2 == 0 and accent or Color3.fromRGB(255, 93, 219), BackgroundTransparency = 0.22 + (i % 5) * 0.10, BorderSizePixel = 0, ZIndex = 3})
-				pill(node); addAnimated(node, "spark", {seed = i, x = (i * 0.271) % 1, y = (i * 0.413) % 1, speed = 0.015 + (i % 5) * 0.004})
-			end
-			for i = 1, 12 do make("Frame", {Name = "Scanline", Size = UDim2.new(1.2, 0, 0, 2), Position = UDim2.new(-0.1, 0, (i * 0.083) % 1, 0), Rotation = -2, BackgroundColor3 = accent, BackgroundTransparency = 0.86, BorderSizePixel = 0, ZIndex = 2}) end
-		elseif backdropTheme == "Neon" then
-			for i = 1, 20 do
-				local bar = make("Frame", {Name = "NeonBar", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(0.25 + (i % 5) * 0.12, 0, 0, 3 + i % 5), Position = UDim2.new((i * 0.193) % 1, 0, (i * 0.417) % 1, 0), Rotation = -42 + (i * 13) % 84, BackgroundColor3 = i % 2 == 0 and Color3.fromRGB(255, 47, 216) or Color3.fromRGB(45, 236, 255), BackgroundTransparency = 0.38 + (i % 4) * 0.10, BorderSizePixel = 0, ZIndex = 1})
-				pill(bar)
-			end
-			for i = 1, 170 do
-				local dot = make("Frame", {Name = "NeonParticle", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(1 + i % 5, 1 + i % 5), Position = UDim2.new((i * 0.618) % 1, 0, (i * 0.347) % 1, 0), BackgroundColor3 = i % 2 == 0 and Color3.fromRGB(52, 239, 255) or Color3.fromRGB(255, 75, 222), BackgroundTransparency = 0.25 + (i % 5) * 0.10, BorderSizePixel = 0, ZIndex = 2})
-				pill(dot); addAnimated(dot, "spark", {seed = i, x = (i * 0.618) % 1, y = (i * 0.347) % 1, speed = 0.017 + (i % 5) * 0.004})
-			end
-		elseif backdropTheme == "Sakura" then
-			for i = 1, 15 do make("Frame", {Name = "PetalGlow", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(0.7 + i * 0.05, 0, 0.12, 0), Position = UDim2.new((i * 0.31) % 1, 0, (i * 0.071) % 1, 0), Rotation = -18 + i * 5, BackgroundColor3 = i % 2 == 0 and Color3.fromRGB(255, 116, 185) or Color3.fromRGB(168, 84, 170), BackgroundTransparency = 0.94, BorderSizePixel = 0, ZIndex = 0}) end
-			for i = 1, 130 do
-				local petal = make("Frame", {Name = "Petal", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(4 + i % 6, 2 + i % 4), Position = UDim2.new((i * 0.618) % 1, 0, (i * 0.371) % 1, 0), Rotation = -50 + (i * 17) % 100, BackgroundColor3 = i % 3 == 0 and Color3.fromRGB(255, 221, 238) or Color3.fromRGB(255, 126, 183), BackgroundTransparency = 0.20 + (i % 5) * 0.10, BorderSizePixel = 0, ZIndex = 2})
-				pill(petal); addAnimated(petal, "spark", {seed = i, x = (i * 0.618) % 1, y = (i * 0.371) % 1, speed = 0.012 + (i % 4) * 0.004})
-			end
-		elseif backdropTheme == "Forest" then
-			for layer = 1, 14 do make("Frame", {Name = "Canopy" .. layer, Size = UDim2.new(1.4, 0, 0.22, 0), Position = UDim2.new(-0.2, 0, -0.04 + layer * 0.075, 0), Rotation = -8 + layer * 2, BackgroundColor3 = layer % 2 == 0 and Color3.fromRGB(7, 77, 52) or Color3.fromRGB(15, 111, 64), BackgroundTransparency = 0.82 + layer * 0.008, BorderSizePixel = 0, ZIndex = 0}) end
-			for i = 1, 115 do
-				local firefly = make("Frame", {Name = "Firefly", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(2 + i % 4, 2 + i % 4), Position = UDim2.new((i * 0.271) % 1, 0, (i * 0.413) % 1, 0), BackgroundColor3 = i % 3 == 0 and Color3.fromRGB(255, 241, 126) or Color3.fromRGB(127, 255, 168), BackgroundTransparency = 0.22 + (i % 5) * 0.10, BorderSizePixel = 0, ZIndex = 2})
-				pill(firefly); addAnimated(firefly, "star", {seed = i, base = (i * 0.413) % 0.94, x = (i * 0.271) % 1, speed = 0.018 + (i % 4) * 0.005})
-			end
-		elseif backdropTheme == "Prism" then
-			for layer = 1, 18 do
-				local hue = layer % 3 == 0 and Color3.fromRGB(112, 246, 255) or (layer % 3 == 1 and Color3.fromRGB(169, 105, 255) or Color3.fromRGB(255, 104, 214))
-				make("Frame", {Name = "PrismGlow" .. layer, Size = UDim2.new(1.35, 0, 0.18 + layer * 0.012, 0), Position = UDim2.new(-0.18, 0, -0.08 + layer * 0.073, 0), Rotation = -28 + layer * 3, BackgroundColor3 = hue, BackgroundTransparency = 0.93, BorderSizePixel = 0, ZIndex = 0})
-			end
-			for i = 1, 160 do
-				local shard = make("Frame", {Name = "PrismShard", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(2 + i % 6, 12 + i % 28), Position = UDim2.new((i * 0.618) % 1, 0, (i * 0.371) % 1, 0), Rotation = -55 + (i * 23) % 110, BackgroundColor3 = i % 3 == 0 and Color3.fromRGB(231, 253, 255) or (i % 2 == 0 and accent or secondary), BackgroundTransparency = 0.30 + (i % 7) * 0.075, BorderSizePixel = 0, ZIndex = 2})
-				pill(shard); addAnimated(shard, "spark", {seed = i, x = (i * 0.618) % 1, y = (i * 0.371) % 1, speed = 0.010 + (i % 6) * 0.003})
-			end
-			for i = 1, 8 do
-				local ring = make("Frame", {Name = "PrismRing", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(100 + i * 58, 100 + i * 58), Position = UDim2.new(0.52, 0, 0.48, 0), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 1})
-				local stroke = Instance.new("UIStroke"); stroke.Color = i % 2 == 0 and accent or secondary; stroke.Transparency = 0.84 + i * 0.012; stroke.Thickness = 2; stroke.Parent = ring; pill(ring)
-			end
-		elseif backdropTheme == "Void" then
-			for i = 1, 180 do
-				local star = make("Frame", {Name = "VoidStar", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(1 + i % 3, 1 + i % 3), Position = UDim2.new((i * 0.618) % 1, 0, (i * 0.371) % 1, 0), BackgroundColor3 = i % 4 == 0 and Color3.fromRGB(173, 101, 255) or Color3.fromRGB(238, 233, 255), BackgroundTransparency = 0.25 + (i % 5) * 0.11, BorderSizePixel = 0, ZIndex = 2})
-				pill(star); addAnimated(star, "star", {seed = i, base = (i * 0.371) % 0.95, x = (i * 0.618) % 1, speed = 0.012 + (i % 4) * 0.004})
-			end
-			for i = 1, 9 do
-				local ring = make("Frame", {Name = "GravityRing", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(70 + i * 45, 70 + i * 45), Position = UDim2.new(0.52, 0, 0.48, 0), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 1})
-				local stroke = Instance.new("UIStroke"); stroke.Color = Color3.fromRGB(117, 75, 255); stroke.Transparency = 0.86 + i * 0.012; stroke.Thickness = 2; stroke.Parent = ring
-				pill(ring)
-			end
-		end
-
-		backdropParts = animated
-	end
-	local function animateBackdrop(dt)
-		backdropClock = backdropClock + (dt or 0)
-		for _, item in ipairs(backdropParts) do
-			local node = item.node
-			if node and node.Parent then
-				if item.kind == "bubble" then node.Position = UDim2.new((item.x + math.sin(backdropClock + item.seed) * 0.012) % 1, 0, 1 - ((backdropClock * item.speed + item.seed * 0.037) % 0.96), 0)
-				elseif item.kind == "spark" then node.Position = UDim2.new((item.x + math.sin(backdropClock * 0.6 + item.seed) * 0.015) % 1, 0, (item.y - backdropClock * item.speed) % 1, 0)
-				elseif item.kind == "star" then node.Position = UDim2.new(item.x, 0, item.base + math.sin(backdropClock * item.speed + item.seed) * 0.012, 0)
-				elseif item.kind == "generic" then
-					local phase = item.phase + backdropClock * item.speed
-					node.Position = UDim2.new(item.x + math.sin(phase) * item.amp, item.xo, item.y + math.cos(phase * 0.83) * item.amp, item.yo)
-					node.Rotation = item.rotation + math.sin(phase * 0.71) * item.rotAmp
-					if item.baseTransparency and item.baseTransparency < 0.98 then node.BackgroundTransparency = math.clamp(item.baseTransparency + math.sin(phase * 0.53) * 0.018, 0, 1) end
-				else local phase = item.phase + backdropClock * item.speed; node.Position = UDim2.new(item.x, 0, item.base + math.sin(phase) * item.amp, 0); node.Rotation = math.cos(phase) * (item.kind == "foam" and 8 or 10) end
-			end
-		end
-	end
 	local ok, err = pcall(function()
-		-- WindUI window
 		window = UI:CreateWindow({
 			Title = "당구 통합 도우미",
-			Author = "포켓볼·3구·4구 자동 감지 · 예상 경로 · 자동 플레이",
+			Author = "정밀 예측 경로 · 자동 플레이 최적화",
 			Icon = "target",
 			Folder = "BilliardsSuite",
-			Size = UDim2.fromOffset(540, 540),
-			MinSize = Vector2.new(420, 360),
+			Size = UDim2.fromOffset(520, 500),
+			MinSize = Vector2.new(400, 320),
 			Theme = "Dark",
 			Resizable = true,
 			HideSearchBar = true,
 		})
 
-		local loadingSettings = true
-		local settingsPath = "Billiards/autoplay_settings.json"
-		local savedSettings = {}
-		local HttpService = game:GetService("HttpService")
-		local function loadSettings()
-			local read = (getgenv and getgenv().readfile) or readfile
-			if type(read) ~= "function" then return end
-			local ok2, raw = pcall(read, settingsPath)
-			if ok2 and type(raw) == "string" then
-				local decoded, data = pcall(HttpService.JSONDecode, HttpService, raw)
-				if decoded and type(data) == "table" then savedSettings = data end
-			end
-		end
-		local function saveSettings()
-			if loadingSettings then return end
-			local write = (getgenv and getgenv().writefile) or writefile
-			local make = (getgenv and getgenv().makefolder) or makefolder
-			if type(write) ~= "function" or type(make) ~= "function" then return end
-			pcall(make, "Billiards")
-			local data = {
-				version = 1,
-				enabled = state.Enabled == true,
-				preview = preview.Enabled == true,
-				strongPlay = state.StrongPlay == true,
-				smoothCue = state.SmoothCue == true,
-				humanThinking = state.HumanThinking == true,
-				style = state.Style,
-				thinkSeconds = state.ThinkSeconds,
-			}
-			local ok2, raw = pcall(HttpService.JSONEncode, HttpService, data)
-			if ok2 then pcall(write, settingsPath, raw) end
-		end
-		loadSettings()
-
-		-- helper: paragraph used as live label
 		local function makeLabel(parent, title, desc)
 			local p = parent:Paragraph({ Title = title or "", Desc = desc or "" })
 			function p:SetText(t)
@@ -1762,46 +1291,29 @@ local function startAuto(preview)
 		end
 
 		local mainTab = window:Tab({ Title = "당구 도우미", Icon = "circle-dot" })
-		modeLabel = makeLabel(mainTab, "모드", "포켓볼·3구·4구 모드 확인 중")
+		modeLabel = makeLabel(mainTab, "모드", "모드 확인 중")
 
 		mainTab:Toggle({
-			Title = "예상 경로 표시 (항상 켜짐)",
+			Title = "예상 경로 표시",
 			Value = true,
-			Callback = function(_) preview.SetEnabled(true); saveSettings() end,
+			Callback = function(_) preview.SetEnabled(true) end,
 		})
 
 		toggle = mainTab:Toggle({
 			Title = "자동 플레이",
 			Value = false,
-			Callback = function(v) state.SetEnabled(v == true); saveSettings() end,
-		})
-		-- compatibility: old code calls toggle:Set(false, true)
-		if toggle and type(toggle.Set) == "function" then
-			local originalSet = toggle.Set
-			function toggle:Set(v, _)
-				return originalSet(self, v == true)
-			end
-		end
-
-		mainTab:Paragraph({
-			Title = "타격 정책",
-			Desc = "득점·다음 수·수비를 비교 · 검증된 유효 타격 실행",
+			Callback = function(v) state.SetEnabled(v == true) end,
 		})
 
-		mainTab:Toggle({
-			Title = "다음 수와 수비까지 비교",
-			Value = savedSettings.strongPlay ~= false,
-			Callback = function(v) state.StrongPlay = v == true; saveSettings() end,
-		})
 		mainTab:Toggle({
 			Title = "큐대 부드럽게 이동",
-			Value = savedSettings.smoothCue ~= false,
-			Callback = function(v) state.SetSmoothCue(v == true); saveSettings() end,
+			Value = true,
+			Callback = function(v) state.SetSmoothCue(v == true) end,
 		})
 		mainTab:Toggle({
-			Title = "방향을 고민하는 동작",
-			Value = savedSettings.humanThinking ~= false,
-			Callback = function(v) state.HumanThinking = v == true; saveSettings() end,
+			Title = "자연스러운 조준 동작",
+			Value = true,
+			Callback = function(v) state.HumanThinking = v == true end,
 		})
 
 		statusLabel = makeLabel(mainTab, "상태", state.Status or "준비 중")
@@ -1820,97 +1332,40 @@ local function startAuto(preview)
 			Callback = function() state.Stop() end,
 		})
 
-		local stylesTab = window:Tab({ Title = "당구 스타일", Icon = "sparkles" })
-		stylesTab:Paragraph({
-			Title = "전략 프리셋",
-			Desc = "스타일은 후보 생성과 득점·수비 평가에 반영됩니다.",
-		})
-
-		local styleLabels = {
-			balanced = "균형형 · 득점과 수비",
-			chess = "체스형 · 다음 수까지 계산",
-			basic = "기본형 · 원본 자동플레이",
-			alien = "Alien · 연속득점·상대차단",
-			attack = "공격형 · 최대 득점",
-			art = "예술당구형 · 기술구·예술구",
-			defense = "방어형 · 혼란·득점 차단",
-		}
-		local styleValues = { "balanced", "chess", "basic", "alien", "attack", "art", "defense" }
-		local styleDisplay = {}
-		for _, k in ipairs(styleValues) do styleDisplay[#styleDisplay + 1] = styleLabels[k] end
-		local defaultStyleKey = savedSettings.style or state.Style or "balanced"
-		local defaultStyleLabel = styleLabels[defaultStyleKey] or styleLabels.balanced
-
+		local stylesTab = window:Tab({ Title = "스타일", Icon = "sparkles" })
 		stylesTab:Dropdown({
 			Title = "플레이 스타일",
-			Values = styleDisplay,
-			Value = defaultStyleLabel,
+			Values = {"균형형 · 득점과 수비", "체스형 · 정밀 계산", "공격형 · 최대 득점", "예술당구형", "방어형"},
+			Value = "균형형 · 득점과 수비",
 			Callback = function(selected)
-				local key = "balanced"
-				for k, label in pairs(styleLabels) do
-					if label == selected then key = k break end
-				end
-				state.SetStyle(key)
-				saveSettings()
+				if string.find(selected, "체스") then state.SetStyle("chess")
+				elseif string.find(selected, "공격") then state.SetStyle("attack")
+				elseif string.find(selected, "예술") then state.SetStyle("art")
+				elseif string.find(selected, "방어") then state.SetStyle("defense")
+				else state.SetStyle("balanced") end
 			end,
 		})
 
 		stylesTab:Slider({
-			Title = "계산 시간",
+			Title = "계산 정밀도 시간",
 			Step = 1,
-			Value = {
-				Min = 3,
-				Max = 15,
-				Default = tonumber(savedSettings.thinkSeconds) or state.ThinkSeconds or 10,
-			},
-			Callback = function(v)
-				state.ThinkSeconds = v
-				saveSettings()
-			end,
-		})
-
-		stylesTab:Toggle({
-			Title = "후속 수까지 깊게 탐색",
-			Value = savedSettings.strongPlay ~= false,
-			Callback = function(v) state.StrongPlay = v == true; saveSettings() end,
-		})
-
-		stylesTab:Paragraph({
-			Title = "안내",
-			Desc = "기본형은 원본 자동플레이 계산을 사용합니다. 공격형은 득점 루트를 전부 탐색하고, 예술당구형은 계산 시간이 길수록 더 많은 기술구·예술구를 탐색하되 득점을 우선합니다. Alien·방어형은 별도 전략을 사용합니다.",
-		})
-
-		local settingsTab = window:Tab({ Title = "설정", Icon = "settings" })
-		settingsTab:Paragraph({
-			Title = "안내",
-			Desc = "설정은 자동으로 저장됩니다. WindUI 테마는 창 상단에서 변경할 수 있습니다.",
-		})
-		settingsTab:Button({
-			Title = "설정 저장",
-			Icon = "save",
-			Callback = function() saveSettings() end,
+			Value = { Min = 3, Max = 12, Default = 8 },
+			Callback = function(v) state.ThinkSeconds = v end,
 		})
 
 		state.Window = window
-		if savedSettings.style then state.SetStyle(savedSettings.style) end
-		if savedSettings.preview ~= nil then preview.SetEnabled(savedSettings.preview == true) end
-		if savedSettings.strongPlay ~= nil then state.StrongPlay = savedSettings.strongPlay == true end
-		if savedSettings.smoothCue ~= nil then state.SetSmoothCue(savedSettings.smoothCue == true) end
-		if savedSettings.humanThinking ~= nil then state.HumanThinking = savedSettings.humanThinking == true end
-		if savedSettings.thinkSeconds then state.ThinkSeconds = tonumber(savedSettings.thinkSeconds) or state.ThinkSeconds end
-		if savedSettings.enabled == true then state.SetEnabled(true) end
-		loadingSettings = false
 	end)
-if not ok then state.UIError = tostring(err) warn("자동 플레이 창 오류: " .. state.UIError) end
-	heartbeat = runService.Heartbeat:Connect(function(dt)
-		pcall(animateBackdrop, dt)
+	if not ok then warn("창 생성 오류: " .. tostring(err)) end
+
+	heartbeat = runService.Heartbeat:Connect(function()
 		local ok, err = pcall(tick)
 		if not ok then state.Error = tostring(err) pause("자동 플레이 오류: " .. state.Error) end
 	end)
 	tick()
-	print("당구 통합 도우미 준비 완료: 포켓볼·3구·4구 자동 감지, 예상 경로 표시 켜짐, 자동 플레이 꺼짐")
+	print("당구 도우미 로드 완료: 고정밀 예측 경로 및 자동 플레이 활성화 대기 중")
 	return state
 end
+
 local preview = startPreview()
 local ok, suite = pcall(startAuto, preview)
 if not ok then preview.Stop() error(suite) end
